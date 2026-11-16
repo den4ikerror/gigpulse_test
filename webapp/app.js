@@ -251,10 +251,12 @@ function updateCategoryOptions() {
 }
 
 async function loadProfile() {
-    const [data, wheel] = await Promise.all([
+    const [profileResult, wheelResult] = await Promise.allSettled([
         apiFetch('/api/user/profile'),
         apiFetch('/api/user/wheel'),
     ]);
+    if (profileResult.status === 'rejected') throw profileResult.reason;
+    const data = profileResult.value;
     state.filters = data.filters || [];
     state.user = data.user;
     updateCategoryOptions();
@@ -276,7 +278,17 @@ async function loadProfile() {
         ? `Безлімітний доступ до: ${formatDate(user.subscription_until)}`
         : 'Платні підписки скоро з’являться.';
     profile.append(title, access, subscription);
-    renderWheel(wheel);
+    if (wheelResult.status === 'fulfilled') {
+        renderWheel(wheelResult.value);
+    } else {
+        state.wheel = null;
+        document.getElementById('spin-wheel').disabled = true;
+        document.getElementById('wheel-status').textContent =
+            'Колесо недоступне. Оновіть серверну версію застосунку.';
+        document.getElementById('wheel-result').classList.add('hidden');
+        document.getElementById('wheel-prizes').replaceChildren();
+        showToast(`Не вдалося завантажити колесо: ${wheelResult.reason.message}`);
+    }
 }
 
 function renderWheel(wheel, resultText = '') {
