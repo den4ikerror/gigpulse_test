@@ -12,7 +12,6 @@ class RSSParser(BaseParser):
         self.session: aiohttp.ClientSession | None = None
         self.feeds = [
             {"name": "Freelancehunt", "url": "https://freelancehunt.com/projects.rss"},
-            {"name": "DOU Jobs", "url": "https://jobs.dou.ua/vacancies/feeds/"}
         ]
 
     async def start(self) -> None:
