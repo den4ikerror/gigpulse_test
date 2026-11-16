@@ -26,7 +26,15 @@ const categories = {
     audio_voiceover: 'Аудіо та озвучення',
     virtual_assistance: 'Віртуальна допомога та адміністрування',
 };
-const state = { tab: 'feed', filters: [], orderId: null, toastTimer: null };
+const state = {
+    tab: 'feed',
+    filters: [],
+    orderId: null,
+    currentOrder: null,
+    user: null,
+    wheel: null,
+    toastTimer: null,
+};
 const skillsStorageKey = 'gigpulse-user-skills';
 
 async function apiFetch(url, options = {}) {
@@ -40,7 +48,8 @@ async function apiFetch(url, options = {}) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-        throw new Error(data.detail || `Помилка запиту (${response.status})`);
+        const detail = typeof data.detail === 'string' ? data.detail : data.detail?.message;
+        throw new Error(detail || `Помилка запиту (${response.status})`);
     }
     return data;
 }
@@ -76,6 +85,10 @@ function renderOrders(container, orders, emptyText) {
     for (const order of orders) {
         const card = document.createElement('article');
         card.className = 'order-card';
+        card.tabIndex = 0;
+        card.setAttribute('role', 'button');
+        card.setAttribute('aria-label', `Деталі замовлення: ${order.title}`);
+        card.dataset.orderId = order.id;
 
         const meta = document.createElement('div');
         meta.className = 'order-meta';
@@ -84,7 +97,9 @@ function renderOrders(container, orders, emptyText) {
         category.textContent = categoryName(order.category);
         const budget = document.createElement('span');
         budget.className = 'budget';
-        budget.textContent = order.budget || 'Бюджет не вказано';
+        budget.textContent = order.contact_unlocked
+            ? (order.budget || 'Бюджет не вказано')
+            : 'Деталі приховано';
         meta.append(category, budget);
 
         const title = document.createElement('h2');
@@ -92,6 +107,9 @@ function renderOrders(container, orders, emptyText) {
         const summary = document.createElement('p');
         summary.className = 'order-summary';
         summary.textContent = order.summary;
+        const openHint = document.createElement('span');
+        openHint.className = 'open-hint';
+        openHint.textContent = order.contact_unlocked ? 'Деталі відкриті' : 'Натисніть, щоб переглянути';
 
         const footer = document.createElement('div');
         footer.className = 'order-footer';
@@ -100,13 +118,15 @@ function renderOrders(container, orders, emptyText) {
 
         const actions = document.createElement('div');
         actions.className = 'order-actions';
-        const proposal = document.createElement('button');
-        proposal.type = 'button';
-        proposal.className = 'text-button';
-        proposal.dataset.action = 'proposal';
-        proposal.dataset.orderId = order.id;
-        proposal.textContent = 'AI-відгук';
-        actions.append(proposal);
+        if (order.contact_unlocked) {
+            const proposal = document.createElement('button');
+            proposal.type = 'button';
+            proposal.className = 'text-button';
+            proposal.dataset.action = 'proposal';
+            proposal.dataset.orderId = order.id;
+            proposal.textContent = 'AI-відгук';
+            actions.append(proposal);
+        }
 
         let contactUrl = null;
         try {
@@ -135,7 +155,7 @@ function renderOrders(container, orders, emptyText) {
         favorite.setAttribute('aria-label', order.is_favorite ? 'Видалити з обраного' : 'Додати в обране');
         actions.append(favorite);
         footer.append(source, actions);
-        card.append(meta, title, summary, footer);
+        card.append(meta, title, summary, openHint, footer);
         container.append(card);
     }
 }
@@ -231,162 +251,142 @@ function updateCategoryOptions() {
 }
 
 async function loadProfile() {
-    const data = await apiFetch('/api/user/profile');
+    const [data, wheel] = await Promise.all([
+        apiFetch('/api/user/profile'),
+        apiFetch('/api/user/wheel'),
+    ]);
     state.filters = data.filters || [];
+    state.user = data.user;
     updateCategoryOptions();
     const user = data.user;
     document.getElementById('subscription-badge').textContent =
-        user.subscription_until && new Date(user.subscription_until) > new Date()
-            ? `Тріал до ${formatDate(user.subscription_until)}`
-            : 'Без активної підписки';
+        user.has_subscription
+            ? `Безліміт до ${formatDate(user.subscription_until)}`
+            : `${user.contact_credits} безкоштовних контактів`;
     const profile = document.getElementById('profile-card');
     profile.replaceChildren();
     const title = document.createElement('h2');
     title.textContent = user.username ? `@${user.username}` : `Telegram ID: ${user.telegram_id}`;
-    const trial = document.createElement('p');
-    trial.textContent = user.trial_used ? 'Пробний період уже активовано.' : 'Пробний період ще не активовано.';
+    const access = document.createElement('p');
+    access.textContent = user.has_subscription
+        ? 'У вас активний безлімітний доступ до повних описів і контактів.'
+        : `Залишилося безкоштовних відкриттів контактів: ${user.contact_credits}.`;
     const subscription = document.createElement('p');
-    subscription.textContent = user.subscription_until
-        ? `Доступ до: ${formatDate(user.subscription_until)}`
-        : 'Активної підписки немає.';
-    profile.append(title, trial, subscription);
+    subscription.textContent = user.has_subscription
+        ? `Безлімітний доступ до: ${formatDate(user.subscription_until)}`
+        : 'Платні підписки скоро з’являться.';
+    profile.append(title, access, subscription);
+    renderWheel(wheel);
 }
 
-async function switchTab(tab) {
-    state.tab = tab;
-    document.querySelectorAll('.tab').forEach(button => {
-        const active = button.dataset.tab === tab;
-        button.classList.toggle('active', active);
-        button.setAttribute('aria-selected', String(active));
-    });
-    document.querySelectorAll('.tab-content').forEach(section => {
-        section.classList.toggle('hidden', section.id !== `content-${tab}`);
-    });
+function renderWheel(wheel, resultText = '') {
+    state.wheel = wheel;
+    const button = document.getElementById('spin-wheel');
+    const status = document.getElementById('wheel-status');
+    const result = document.getElementById('wheel-result');
+    const prizeList = document.getElementById('wheel-prizes');
+    button.disabled = !wheel.can_spin;
+    status.textContent = wheel.can_spin
+        ? 'Є безкоштовне обертання — спробуйте виграти контакти або безліміт!'
+        : `Наступне обертання: ${formatDate(wheel.next_spin_at)}.`;
+    result.textContent = resultText;
+    result.classList.toggle('hidden', !resultText);
+    prizeList.replaceChildren();
+    for (const prize of wheel.prizes || []) {
+        const item = document.createElement('li');
+        item.textContent = `${prize.label} — ${prize.probability}%`;
+        prizeList.append(item);
+    }
+}
+
+async function performWheelSpin() {
+    const button = document.getElementById('spin-wheel');
+    const icon = document.getElementById('wheel-icon');
+    button.disabled = true;
+    icon.classList.add('spinning');
     try {
-        if (tab === 'feed') await loadOrders();
-        if (tab === 'favorites') await loadFavorites();
-        if (tab === 'filters') await loadFilters();
-        if (tab === 'profile') await loadProfile();
-        setMainButton(tab);
+        const [result] = await Promise.all([
+            apiFetch('/api/user/wheel/spin', { method: 'POST' }),
+            new Promise(resolve => setTimeout(resolve, 1800)),
+        ]);
+        tg?.HapticFeedback?.notificationOccurred('success');
+        await loadProfile();
+        renderWheel(state.wheel, `Ваш приз: ${result.prize.label}!`);
+        if (state.currentOrder) {
+            state.currentOrder.contact_credits = result.contact_credits;
+        }
     } catch (error) {
         showToast(error.message);
+        button.disabled = !state.wheel?.can_spin;
+    } finally {
+        icon.classList.remove('spinning');
     }
 }
 
-function setMainButton(tab) {
-    if (!tg?.MainButton) return;
-    tg.MainButton.offClick(refreshOrders);
-    if (tab === 'feed') {
-        tg.MainButton.setText('Оновити стрічку');
-        tg.MainButton.onClick(refreshOrders);
-        tg.MainButton.show();
-    } else {
-        tg.MainButton.hide();
+function renderOrderDetails(order) {
+    state.currentOrder = order;
+    document.getElementById('detail-category').textContent = categoryName(order.category);
+    document.getElementById('detail-title').textContent = order.title;
+    document.getElementById('detail-summary').textContent = order.summary;
+    document.getElementById('detail-source').textContent = `Джерело: ${order.source_name}`;
+    document.getElementById('detail-budget').textContent = order.budget
+        ? `Бюджет: ${order.budget}`
+        : 'Бюджет приховано до відкриття';
+
+    const descriptionSection = document.getElementById('full-description-section');
+    const description = document.getElementById('detail-full-description');
+    const gate = document.getElementById('contact-gate');
+    const unlock = document.getElementById('unlock-contact');
+    const contact = document.getElementById('contact-link');
+    const hasDetails = Boolean(order.full_description);
+    let safeContactUrl = null;
+    try {
+        const parsedUrl = new URL(order.contact_url);
+        if (['http:', 'https:'].includes(parsedUrl.protocol)) safeContactUrl = parsedUrl.href;
+    } catch {
+        safeContactUrl = null;
     }
+    descriptionSection.classList.toggle('hidden', !hasDetails);
+    description.textContent = hasDetails ? order.full_description : '';
+    contact.classList.toggle('hidden', !safeContactUrl);
+    contact.href = safeContactUrl || '#';
+    unlock.classList.toggle('hidden', hasDetails);
+    gate.replaceChildren();
+
+    if (hasDetails) {
+        gate.textContent = order.has_subscription
+            ? 'Повний доступ активний за підпискою.'
+            : 'Контакт уже відкрито — повторно списувати відкриття не потрібно.';
+        if (!safeContactUrl) gate.textContent += ' Посилання на джерело некоректне або недоступне.';
+        return;
+    }
+
+    if (order.contact_credits > 0) {
+        gate.textContent = `Короткий опис і джерело доступні всім. Одне з ${order.contact_credits} безкоштовних відкриттів покаже повний опис і контакт.`;
+        unlock.textContent = 'Відкрити контакт · 1 спроба';
+        unlock.disabled = false;
+        return;
+    }
+
+    gate.textContent = 'Безкоштовні відкриття закінчилися. Отримайте додаткові контакти у колесі або дочекайтеся підписки.';
+    unlock.classList.add('hidden');
+    const wheelButton = document.createElement('button');
+    wheelButton.type = 'button';
+    wheelButton.className = 'text-button';
+    wheelButton.dataset.action = 'wheel-tab';
+    wheelButton.textContent = 'Перейти до колеса можливостей';
+    gate.append(wheelButton);
 }
 
-function refreshOrders() {
-    loadOrders().catch(error => showToast(error.message));
-}
-
-function openProposalModal(orderId) {
+async function openOrder(orderId) {
     state.orderId = Number(orderId);
-    const modal = document.getElementById('proposal-modal');
-    document.getElementById('proposal-result').classList.add('hidden');
-    document.getElementById('proposal-error').classList.add('hidden');
-    document.getElementById('user-skills').value = localStorage.getItem(skillsStorageKey) || '';
+    const modal = document.getElementById('order-modal');
+    document.getElementById('detail-title').textContent = 'Завантаження…';
+    document.getElementById('detail-summary').textContent = '';
+    document.getElementById('contact-gate').textContent = '';
     modal.showModal();
     tg?.BackButton?.show();
     tg?.HapticFeedback?.impactOccurred('light');
-}
-
-function closeProposalModal() {
-    document.getElementById('proposal-modal').close();
-    state.orderId = null;
-    tg?.BackButton?.hide();
-}
-
-async function generateProposal() {
-    const skills = document.getElementById('user-skills').value.trim();
-    const result = document.getElementById('proposal-result');
-    const errorNode = document.getElementById('proposal-error');
-    if (skills.length < 2) {
-        errorNode.textContent = 'Опишіть ваші навички (мінімум 2 символи).';
-        errorNode.classList.remove('hidden');
-        return;
-    }
-    localStorage.setItem(skillsStorageKey, skills);
-    errorNode.classList.add('hidden');
-    result.textContent = 'Генеруємо відгук…';
-    result.classList.remove('hidden');
     try {
-        const data = await apiFetch(`/api/orders/${state.orderId}/proposal`, {
-            method: 'POST',
-            body: JSON.stringify({ user_skills: skills }),
-        });
-        result.textContent = data.proposal;
+        renderOrderDetails(await apiFetch(`/api/orders/${state.orderId}`));
     } catch (error) {
-        result.classList.add('hidden');
-        errorNode.textContent = error.message;
-        errorNode.classList.remove('hidden');
-    }
-}
-
-document.querySelector('.tabs').addEventListener('click', event => {
-    const button = event.target.closest('[data-tab]');
-    if (button) switchTab(button.dataset.tab);
-});
-
-document.getElementById('search-form').addEventListener('submit', event => {
-    event.preventDefault();
-    loadOrders().catch(error => showToast(error.message));
-});
-
-document.body.addEventListener('click', async event => {
-    const button = event.target.closest('[data-action]');
-    if (!button) return;
-    if (button.dataset.action === 'proposal') openProposalModal(button.dataset.orderId);
-    if (button.dataset.action === 'favorite') {
-        try {
-            const data = await apiFetch(`/api/orders/${button.dataset.orderId}/favorite`, { method: 'POST' });
-            button.textContent = data.favorited ? '★' : '☆';
-            button.dataset.favorited = String(data.favorited);
-            button.setAttribute('aria-label', data.favorited ? 'Видалити з обраного' : 'Додати в обране');
-            showToast(data.favorited ? 'Додано в обране' : 'Видалено з обраного');
-            tg?.HapticFeedback?.notificationOccurred('success');
-            if (state.tab === 'favorites' && !data.favorited) await loadFavorites();
-        } catch (error) {
-            showToast(error.message);
-        }
-    }
-});
-
-document.getElementById('filters-list').addEventListener('change', event => {
-    const field = event.target;
-    const category = field.dataset.category;
-    const filter = state.filters.find(item => item.category === category);
-    if (!filter) return;
-    if (field.dataset.action === 'filter-enabled') filter.enabled = field.checked;
-    if (field.dataset.action === 'filter-budget') filter.min_budget = Number(field.value || 0);
-    if (field.dataset.action === 'filter-keywords') filter.keywords = field.value.trim() || null;
-    saveFilter(category).catch(error => showToast(error.message));
-});
-
-document.getElementById('close-proposal').addEventListener('click', closeProposalModal);
-document.getElementById('generate-proposal').addEventListener('click', generateProposal);
-tg?.BackButton?.onClick(closeProposalModal);
-
-async function initialize() {
-    if (!initData) {
-        showToast('Відкрийте застосунок через Telegram-бота.');
-        return;
-    }
-    try {
-        await loadProfile();
-        await switchTab('feed');
-    } catch (error) {
-        showToast(error.message);
-    }
-}
-
-initialize();
