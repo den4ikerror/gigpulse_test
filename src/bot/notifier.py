@@ -10,7 +10,6 @@ from src.database.models import (
     EXCLUDED_ORDER_SOURCES,
     ORDER_CATEGORY_LABELS,
 )
-from src.bot.keyboards.inline import get_order_action_keyboard
 from src.services.order_filters import matches_order_filter
 
 logger = logging.getLogger("gigpulse.notifier")
@@ -49,12 +48,10 @@ class Notifier:
                 f"🔥 <b>Нове замовлення!</b>\n\n"
                 f"📌 <b>{escape(order.title)}</b>\n\n"
                 f"📁 Категорія: <code>{escape(ORDER_CATEGORY_LABELS.get(order.category, order.category))}</code>\n"
-                f"💰 Бюджет: <code>{escape(order.budget or 'Не вказано')}</code>\n"
                 f"🌐 Джерело: <code>{escape(order.source_name)}</code>\n\n"
-                f"{escape(order.summary[:300])}..."
+                f"{escape(order.summary[:300])}...\n\n"
+                "Відкрийте GigPulse Mini App, щоб переглянути замовлення."
             )
-
-            keyboard = get_order_action_keyboard(order.id, order.contact_url)
 
             semaphore = asyncio.Semaphore(10)
 
@@ -65,7 +62,6 @@ class Notifier:
                             chat_id=telegram_id,
                             text=text,
                             parse_mode="HTML",
-                            reply_markup=keyboard
                         )
                     return True
                 except Exception:
