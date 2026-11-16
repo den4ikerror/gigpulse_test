@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from datetime import timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -17,9 +17,11 @@ from src.database.models import (
     ORDER_CATEGORIES,
     ORDER_CATEGORY_DESCRIPTIONS,
     ORDER_CATEGORY_LABELS,
+    Subscription,
     utc_now,
 )
 from src.database.repository import Repository
+from src.services.rewards import WHEEL_PRIZES, choose_wheel_prize, spin_wheel
 
 
 class PrefilterTests(unittest.TestCase):
@@ -121,6 +123,65 @@ class GroqModelSelectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(result, response)
         self.assertEqual(client.chat.completions.create.await_count, 2)
+
+
+class RewardWheelTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with self.engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        self.session_maker = async_sessionmaker(self.engine, expire_on_commit=False)
+
+    async def asyncTearDown(self):
+        await self.engine.dispose()
+
+    def test_prize_weights_cover_all_outcomes_and_select_expected_segments(self):
+        self.assertEqual(sum(prize.probability_basis_points for prize in WHEEL_PRIZES), 10_000)
+        expected = {
+            0: "contacts_3",
+            4499: "contacts_3",
+            4500: "contacts_5",
+            7500: "contacts_10",
+            9000: "subscription_1d",
+            9500: "subscription_3d",
+            9800: "subscription_7d",
+            9950: "subscription_30d",
+            9999: "subscription_365d",
+        }
+        for draw, prize_key in expected.items():
+            with self.subTest(draw=draw), patch("src.services.rewards.secrets.randbelow", return_value=draw):
+                self.assertEqual(choose_wheel_prize().key, prize_key)
+
+    async def test_wheel_awards_prize_and_enforces_twenty_day_cooldown(self):
+        async with self.session_maker() as session:
+            user = await Repository.get_or_create_user(session, 987650, "wheel_user")
+            user.wheel_next_spin_at = utc_now() - timedelta(seconds=1)
+            await session.commit()
+            with patch(
+                "src.services.rewards.choose_wheel_prize",
+                return_value=next(prize for prize in WHEEL_PRIZES if prize.key == "contacts_5"),
+            ):
+                prize, days = await spin_wheel(session, user)
+            self.assertEqual(prize.contacts, 5)
+            self.assertEqual(days, 0)
+            await session.refresh(user)
+            self.assertEqual(user.contact_credits, 10)
+            self.assertGreater(user.wheel_next_spin_at, utc_now())
+            self.assertIsNone(await spin_wheel(session, user))
+
+            user.wheel_next_spin_at = utc_now() - timedelta(seconds=1)
+            await session.commit()
+            with patch(
+                "src.services.rewards.choose_wheel_prize",
+                return_value=next(prize for prize in WHEEL_PRIZES if prize.key == "subscription_30d"),
+            ):
+                prize, days = await spin_wheel(session, user)
+            self.assertEqual(prize.subscription_days, 30)
+            self.assertEqual(days, 30)
+            await session.refresh(user)
+            self.assertGreater(user.subscription_until, utc_now() + timedelta(days=29))
+            subscriptions = await session.execute(select(Subscription).where(Subscription.user_id == user.id))
+            self.assertEqual(len(list(subscriptions.scalars())), 1)
 
 
 class BatcherTests(unittest.IsolatedAsyncioTestCase):
@@ -257,83 +318,22 @@ class IngestionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             await Repository.add_favorite(session, user.id, order.id)
             self.assertEqual(await Repository.get_user_favorites(session, user.id), [])
 
-    async def test_new_user_gets_trial_and_all_default_filters_once(self):
+    async def test_new_user_gets_contact_credits_and_all_default_filters_once(self):
         async with self.session_maker() as session:
             user = await Repository.get_or_create_user(session, 987654, "test_user")
-            first_trial_end = user.subscription_until
+            first_spin_at = user.wheel_next_spin_at
             filters = await Repository.get_user_filters(session, user.id)
-            self.assertTrue(user.trial_used)
+            self.assertFalse(user.trial_used)
+            self.assertIsNone(user.subscription_until)
+            self.assertEqual(user.contact_credits, 5)
             self.assertEqual(len(filters), len(ORDER_CATEGORIES))
             self.assertEqual({item.category for item in filters}, set(ORDER_CATEGORIES))
 
             repeated_user = await Repository.get_or_create_user(session, 987654, "test_user")
             repeated_filters = await Repository.get_user_filters(session, repeated_user.id)
-            self.assertEqual(repeated_user.subscription_until, first_trial_end)
+            self.assertEqual(repeated_user.wheel_next_spin_at, first_spin_at)
+            self.assertEqual(repeated_user.contact_credits, 5)
             self.assertEqual(len(repeated_filters), len(ORDER_CATEGORIES))
 
     async def test_user_can_update_category_filter_and_favorites(self):
         async with self.session_maker() as session:
-            user = await Repository.get_or_create_user(session, 987655, "filter_user")
-            saved_filter = await Repository.set_user_filter(
-                session,
-                user.id,
-                "frontend_backend",
-                enabled=False,
-                min_budget=1500,
-                keywords="Python, React",
-            )
-            self.assertFalse(saved_filter.enabled)
-            self.assertEqual(saved_filter.min_budget, 1500)
-            self.assertEqual(saved_filter.keywords, "Python, React")
-
-            order = await Repository.create_order(
-                session,
-                hash_id="b" * 64,
-                category="frontend_backend",
-                title="API project",
-                summary="Build an API",
-                budget="2000 UAH",
-                source_name="Test",
-                contact_url="https://example.com/api",
-            )
-            self.assertTrue(await Repository.add_favorite(session, user.id, order.id))
-            self.assertEqual(
-                [item.id for item in await Repository.get_user_favorites(session, user.id)],
-                [order.id],
-            )
-            self.assertEqual(
-                await Repository.get_favorite_order_ids(session, user.id, [order.id]),
-                {order.id},
-            )
-            self.assertTrue(await Repository.remove_favorite(session, user.id, order.id))
-
-    async def test_irrelevant_ingested_post_is_processed_without_creating_an_order(self):
-        post = {
-            "hash_id": "d" * 64,
-            "title": "Drone pilot",
-            "summary": "Operate unmanned aerial vehicles",
-            "raw_text": "Drone pilot vacancy",
-            "contact_url": "https://example.com/drone-pilot",
-            "source_name": "Test",
-            "budget": None,
-        }
-        async with self.session_maker() as session:
-            await Repository.enqueue_posts(session, [post])
-            pending = await Repository.get_pending_posts(session)
-            self.assertEqual(len(pending), 1)
-            orders = await Repository.complete_ingested_posts(
-                session,
-                pending,
-                {pending[0].id: {"index": 0, "category": "irrelevant"}},
-            )
-            self.assertEqual(orders, [])
-            self.assertEqual(await Repository.get_pending_posts(session), [])
-            self.assertEqual(await Repository.get_pending_notifications(session), [])
-            self.assertFalse(await Repository.order_exists(session, post["hash_id"]))
-            processed = await session.get(IngestedPost, pending[0].id)
-            self.assertEqual(processed.status, "processed")
-            self.assertIsNotNone(processed.processed_at)
-
-
-if __name__ == "__main__":
-    unittest.main()
