@@ -1,8 +1,17 @@
 from datetime import timedelta
-from sqlalchemy import select, delete, desc, and_, or_
+from sqlalchemy import select, delete, desc, and_, or_, func, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from src.database.models import User, Order, Favorite, UserFilter, IngestedPost, ORDER_CATEGORIES, utc_now
+from src.database.models import (
+    User,
+    Order,
+    Favorite,
+    UserFilter,
+    IngestedPost,
+    ORDER_CATEGORIES,
+    EXCLUDED_ORDER_SOURCES,
+    utc_now,
+)
 
 class Repository:
     @staticmethod
@@ -137,6 +146,20 @@ class Repository:
         session: AsyncSession,
         limit: int = 6,
     ) -> list[IngestedPost]:
+        if EXCLUDED_ORDER_SOURCES:
+            await session.execute(
+                update(IngestedPost)
+                .where(
+                    IngestedPost.status == "pending",
+                    func.lower(IngestedPost.source_name).in_(EXCLUDED_ORDER_SOURCES),
+                )
+                .values(
+                    status="processed",
+                    processed_at=utc_now(),
+                    last_error=None,
+                )
+            )
+            await session.commit()
         result = await session.execute(
             select(IngestedPost)
             .where(
@@ -260,7 +283,10 @@ class Repository:
         search: str | None = None,
     ) -> list[Order]:
         since = utc_now() - timedelta(hours=hours)
-        stmt = select(Order).where(Order.created_at >= since)
+        stmt = select(Order).where(
+            Order.created_at >= since,
+            func.lower(Order.source_name).not_in(EXCLUDED_ORDER_SOURCES),
+        )
         if categories is not None:
             stmt = stmt.where(Order.category.in_(categories))
         if search:
@@ -342,7 +368,10 @@ class Repository:
         stmt = (
             select(Order)
             .join(Favorite, Favorite.order_id == Order.id)
-            .where(Favorite.user_id == user_id)
+            .where(
+                Favorite.user_id == user_id,
+                func.lower(Order.source_name).not_in(EXCLUDED_ORDER_SOURCES),
+            )
             .order_by(desc(Favorite.created_at))
             .limit(limit)
         )
