@@ -5,7 +5,7 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart
 from src.database.session import async_session_maker
-from src.database.models import ORDER_CATEGORIES, Order
+from src.database.models import ORDER_CATEGORIES, ORDER_CATEGORY_LABELS, Order
 from src.database.repository import Repository
 from src.bot.keyboards.inline import get_categories_keyboard, get_order_action_keyboard
 
@@ -16,7 +16,8 @@ def format_order(order: Order, favorite: bool = False) -> str:
     prefix = "⭐ <b>[Обране] " if favorite else "📌 <b>"
     return (
         f"{prefix}{escape(order.title)}</b>\n\n"
-        f"📁 <code>{escape(order.category)}</code> | 💰 <code>{escape(order.budget or 'Не вказано')}</code>\n"
+        f"📁 <code>{escape(ORDER_CATEGORY_LABELS.get(order.category, order.category))}</code> | "
+        f"💰 <code>{escape(order.budget or 'Не вказано')}</code>\n"
         f"🌐 Джерело: <code>{escape(order.source_name)}</code>\n\n"
         f"{escape(order.summary[:300])}..."
     )
