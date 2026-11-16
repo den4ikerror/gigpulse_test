@@ -1,6 +1,7 @@
 import logging
 
 from src.config import settings
+from src.ai.groq_chat import create_chat_completion
 
 logger = logging.getLogger("gigpulse.proposal_gen")
 
@@ -73,8 +74,8 @@ class ProposalGenerator:
             client = None
             try:
                 client = AsyncGroq(api_key=settings.GROQ_API_KEY)
-                response = await client.chat.completions.create(
-                    model=settings.GROQ_MODEL,
+                response = await create_chat_completion(
+                    client,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.4,
                 )
