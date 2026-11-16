@@ -2,12 +2,14 @@
 
 GigPulse aggregates freelance listings from RSS feeds and optional public Telegram channels, classifies them, stores them, and notifies Telegram bot users based on their selected categories.
 
+The available categories are: graphic design, web/UI/UX design, other design, copywriting, SMM/social networks, video editing, frontend/backend development, chatbots, 3D visualization, logos/branding, PR/influencers, mobile apps, WordPress/CMS, QA/testing, AI/data/automation, SEO, targeted ads, translation, photo editing, audio/voiceover, and virtual assistance.
+
 ## Phase 1 status and operation
 
 1. The RSS poller fetches Freelancehunt and DOU feeds every 60 seconds. The optional Telethon user client listens to the channels configured in `TG_CHANNELS`.
 2. The batcher groups six posts or flushes after 10 seconds, then persists them in the database before AI processing.
 3. A persistent ingestion queue deduplicates posts by normalized text and contact URL. AI and Telegram delivery failures retain posts for exponential-backoff retries instead of dropping them.
-4. Gemini is tried with configured keys and models; Groq is the fallback. The classifier can reject unrelated posts instead of forcing them into one of the supported categories; only relevant classifications become orders.
+4. Gemini is tried with configured keys and models; Groq is the fallback. The classifier can reject unrelated posts instead of forcing them into one of the supported categories; only relevant classifications become orders. The DOU Jobs vacancy feed is excluded because it contains employment listings rather than freelance projects.
 5. The bot creates a user on `/start`, enables category filters, shows recent listings, and sends new matching listings. A cleanup worker deletes orders older than 48 hours.
 
 Payment processing remains Phase 3.
@@ -18,7 +20,7 @@ The Mini App exposes the 24-hour order feed, category/search/budget filters, fav
 
 Deploy the static `webapp/` over HTTPS, set `WEBAPP_URL` in `.env`, restart the bot, then open the Mini App using its button in `/start`. Telegram Web Apps require HTTPS; a local `http://localhost` address is not a valid production URL.
 
-The proposal generator uses the configured Gemini models/keys and then Groq. Set `GROQ_MODEL` to a model available to your Groq account. If providers fail, the API reports a service error rather than returning a fabricated proposal.
+The proposal generator uses the configured Gemini models/keys and then Groq. Groq models are discovered from the models available to the configured API key; `GROQ_MODEL` can optionally prioritize one of them. If providers fail, the API reports a service error rather than returning a fabricated proposal.
 
 ## Setup
 
@@ -60,5 +62,5 @@ If the bot cannot connect to Telegram, verify DNS/network access to `api.telegra
 - The API/static site runs on `http://localhost:8000` by default.
 - Database tables are also created at startup for local convenience; Alembic migrations are the schema-change source of truth.
 - Gemini model names can change or vary by account. Set `GEMINI_MODEL` and optionally comma-separated `GEMINI_FALLBACK_MODELS` to models enabled for your API key.
-- The Groq model shown in `.env.example` may not be enabled for every account; configure `GROQ_MODEL` to an active model shown in your Groq console.
+- Groq model selection uses the models available to `GROQ_API_KEY`; set `GROQ_MODEL` only if you want to prefer a specific available model.
 - Telegram channel parsing uses a Telethon user session, not the bot token. The first sign-in should be performed only on a trusted local machine.
