@@ -8,7 +8,53 @@ class Base(DeclarativeBase):
 def utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
-ORDER_CATEGORIES = ("dev_bots", "web_dev", "design", "marketing", "video_text")
+ORDER_CATEGORY_LABELS = {
+    "graphic_design": "Графічний дизайн",
+    "web_uiux_design": "Веб-дизайн та UI/UX",
+    "other_design": "Інший дизайн",
+    "copywriting": "Копірайтинг і тексти",
+    "smm_social": "SMM і соцмережі",
+    "video_editing": "Відеомонтаж",
+    "frontend_backend": "Frontend / Backend розробка",
+    "chatbots": "Створення чат-ботів",
+    "3d_visualization": "3D і візуалізація",
+    "logo_branding": "Логотипи та брендинг",
+    "pr_influencers": "PR і блогери",
+    "mobile_apps": "Розробка мобільних застосунків",
+    "wordpress_cms": "WordPress та CMS",
+    "qa_testing": "QA і тестування",
+    "ai_data_automation": "AI, дані й автоматизація",
+    "seo": "SEO",
+    "targeted_ads": "Таргетована реклама",
+    "translation": "Переклад",
+    "photo_editing": "Фото та обробка фото",
+    "audio_voiceover": "Аудіо та озвучення",
+    "virtual_assistance": "Віртуальна допомога та адміністрування",
+}
+ORDER_CATEGORIES = tuple(ORDER_CATEGORY_LABELS)
+ORDER_CATEGORY_DESCRIPTIONS = {
+    "graphic_design": "графічні матеріали, ілюстрації, банери та поліграфія",
+    "web_uiux_design": "дизайн сайтів і вебзастосунків, UX-дослідження та інтерфейси",
+    "other_design": "дизайнерські завдання, що не підходять до інших дизайн-категорій",
+    "copywriting": "написання, редагування та підготовка текстів",
+    "smm_social": "ведення соцмереж і розвиток спільнот, крім окремих рекламних кампаній",
+    "video_editing": "монтаж і постпродакшн відео",
+    "frontend_backend": "розробка сайтів, вебзастосунків, frontend, backend та API",
+    "chatbots": "розробка або доробка Telegram-ботів та інших чат-ботів",
+    "3d_visualization": "3D-моделювання, рендеринг і візуалізація",
+    "logo_branding": "розробка логотипів, айдентики та брендингу",
+    "pr_influencers": "PR-кампанії, зв'язки з медіа та інтеграції з блогерами",
+    "mobile_apps": "розробка застосунків для iOS, Android та кросплатформних мобільних систем",
+    "wordpress_cms": "створення та налаштування сайтів на WordPress та інших CMS",
+    "qa_testing": "ручне або автоматизоване тестування програмного забезпечення",
+    "ai_data_automation": "розробка AI-рішень, обробка даних, скрипти та бізнес-автоматизація",
+    "seo": "технічна або контентна SEO-оптимізація та пошукове просування",
+    "targeted_ads": "налаштування й оптимізація платної таргетованої реклами",
+    "translation": "переклад і локалізація текстів або матеріалів",
+    "photo_editing": "фотозйомка, ретуш та обробка фотографій",
+    "audio_voiceover": "озвучення, запис голосу, аудіомонтаж і звук",
+    "virtual_assistance": "віддалена адміністративна, операційна та віртуальна допомога",
+}
 EXCLUDED_ORDER_SOURCES = ("dou jobs",)
 
 class User(Base):
@@ -32,7 +78,7 @@ class Order(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     hash_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    category: Mapped[str] = mapped_column(String(50), index=True) # dev_bots, web_dev, design, marketing, video_text
+    category: Mapped[str] = mapped_column(String(50), index=True)
     title: Mapped[str] = mapped_column(String(500))
     summary: Mapped[str] = mapped_column(Text)
     budget: Mapped[str | None] = mapped_column(String(100), nullable=True)
