@@ -42,6 +42,13 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(array, expected)
         self.assertEqual(wrapped, expected)
 
+    def test_accepts_irrelevant_items_without_fabricating_a_category(self):
+        parsed = LLMRouter._parse_json_response(
+            '{"orders":[{"index":0,"category":"irrelevant"}]}',
+            1,
+        )
+        self.assertEqual(parsed, [{"index": 0, "category": "irrelevant"}])
+
     def test_rejects_incomplete_or_invalid_classifications(self):
         with self.assertRaises(ClassificationError):
             LLMRouter._parse_json_response(
@@ -200,6 +207,33 @@ class IngestionRepositoryTests(unittest.IsolatedAsyncioTestCase):
                 {order.id},
             )
             self.assertTrue(await Repository.remove_favorite(session, user.id, order.id))
+
+    async def test_irrelevant_ingested_post_is_processed_without_creating_an_order(self):
+        post = {
+            "hash_id": "d" * 64,
+            "title": "Drone pilot",
+            "summary": "Operate unmanned aerial vehicles",
+            "raw_text": "Drone pilot vacancy",
+            "contact_url": "https://example.com/drone-pilot",
+            "source_name": "DOU Jobs",
+            "budget": None,
+        }
+        async with self.session_maker() as session:
+            await Repository.enqueue_posts(session, [post])
+            pending = await Repository.get_pending_posts(session)
+            self.assertEqual(len(pending), 1)
+            orders = await Repository.complete_ingested_posts(
+                session,
+                pending,
+                {pending[0].id: {"index": 0, "category": "irrelevant"}},
+            )
+            self.assertEqual(orders, [])
+            self.assertEqual(await Repository.get_pending_posts(session), [])
+            self.assertEqual(await Repository.get_pending_notifications(session), [])
+            self.assertFalse(await Repository.order_exists(session, post["hash_id"]))
+            processed = await session.get(IngestedPost, pending[0].id)
+            self.assertEqual(processed.status, "processed")
+            self.assertIsNotNone(processed.processed_at)
 
 
 if __name__ == "__main__":
