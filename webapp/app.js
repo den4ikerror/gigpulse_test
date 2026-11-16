@@ -4,11 +4,27 @@ tg?.expand();
 
 const initData = tg?.initData || '';
 const categories = {
-    dev_bots: 'Telegram-боти',
-    web_dev: 'Веброзробка',
-    design: 'Дизайн',
-    marketing: 'Маркетинг',
-    video_text: 'Тексти та відео',
+    graphic_design: 'Графічний дизайн',
+    web_uiux_design: 'Веб-дизайн та UI/UX',
+    other_design: 'Інший дизайн',
+    copywriting: 'Копірайтинг і тексти',
+    smm_social: 'SMM і соцмережі',
+    video_editing: 'Відеомонтаж',
+    frontend_backend: 'Frontend / Backend розробка',
+    chatbots: 'Створення чат-ботів',
+    '3d_visualization': '3D і візуалізація',
+    logo_branding: 'Логотипи та брендинг',
+    pr_influencers: 'PR і блогери',
+    mobile_apps: 'Розробка мобільних застосунків',
+    wordpress_cms: 'WordPress та CMS',
+    qa_testing: 'QA і тестування',
+    ai_data_automation: 'AI, дані й автоматизація',
+    seo: 'SEO',
+    targeted_ads: 'Таргетована реклама',
+    translation: 'Переклад',
+    photo_editing: 'Фото та обробка фото',
+    audio_voiceover: 'Аудіо та озвучення',
+    virtual_assistance: 'Віртуальна допомога та адміністрування',
 };
 const state = { tab: 'feed', filters: [], orderId: null, toastTimer: null };
 const skillsStorageKey = 'gigpulse-user-skills';
