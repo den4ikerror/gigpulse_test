@@ -44,9 +44,46 @@
         </section>
 
         <section id="content-profile" class="tab-content hidden">
-            <article id="profile-card" class="panel" aria-live="polite"></article>
+            <article class="panel wheel-panel">
+                <div class="wheel-icon" id="wheel-icon" aria-hidden="true">🎡</div>
+                <div>
+                    <p class="eyebrow">БЕЗКОШТОВНА НАГОРОДА</p>
+                    <h2>Колесо можливостей</h2>
+                    <p id="wheel-status" class="muted-copy">Завантаження…</p>
+                </div>
+                <button id="spin-wheel" class="primary-button" type="button" disabled>Крутити колесо</button>
+                <p id="wheel-result" class="wheel-result hidden" role="status"></p>
+                <details class="wheel-rules">
+                    <summary>Призи та шанси</summary>
+                    <ul id="wheel-prizes"></ul>
+                    <p>Обертання безкоштовне й доступне раз на 20 днів.</p>
+                </details>
+            </article>
+            <article id="profile-card" class="panel profile-panel" aria-live="polite"></article>
         </section>
     </main>
+
+    <dialog id="order-modal" class="modal order-modal">
+        <div class="modal-content">
+            <button id="close-order" class="modal-close" type="button" aria-label="Закрити">×</button>
+            <span id="detail-category" class="category-tag"></span>
+            <h2 id="detail-title"></h2>
+            <p id="detail-summary" class="order-summary"></p>
+            <div class="detail-meta">
+                <span id="detail-source"></span>
+                <strong id="detail-budget"></strong>
+            </div>
+            <section id="full-description-section" class="full-description hidden">
+                <h3>Повний опис</h3>
+                <p id="detail-full-description"></p>
+            </section>
+            <div id="contact-gate" class="contact-gate"></div>
+            <div class="modal-actions">
+                <button id="unlock-contact" class="primary-button" type="button"></button>
+                <a id="contact-link" class="primary-button link-button hidden" target="_blank" rel="noopener noreferrer">Перейти до замовлення</a>
+            </div>
+        </div>
+    </dialog>
 
     <dialog id="proposal-modal" class="modal">
         <form method="dialog" class="modal-content">
