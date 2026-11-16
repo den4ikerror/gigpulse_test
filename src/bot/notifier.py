@@ -3,7 +3,7 @@ from html import escape
 import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from src.database.models import User, UserFilter, Order
+from src.database.models import User, UserFilter, Order, EXCLUDED_ORDER_SOURCES
 from src.bot.keyboards.inline import get_order_action_keyboard
 from src.services.order_filters import matches_order_filter
 
@@ -15,6 +15,9 @@ class Notifier:
 
     async def notify_new_order(self, session: AsyncSession, order: Order) -> bool:
         """Push notification to all users who enabled this order's category."""
+        if order.source_name.casefold() in EXCLUDED_ORDER_SOURCES:
+            logger.info("Skipping notification from excluded source %s", order.source_name)
+            return True
         try:
             stmt = (
                 select(User.telegram_id, UserFilter.min_budget, UserFilter.keywords)
