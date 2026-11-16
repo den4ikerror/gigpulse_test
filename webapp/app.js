@@ -390,3 +390,210 @@ async function openOrder(orderId) {
     try {
         renderOrderDetails(await apiFetch(`/api/orders/${state.orderId}`));
     } catch (error) {
+        document.getElementById('detail-title').textContent = 'Не вдалося завантажити замовлення';
+        showToast(error.message);
+    }
+}
+
+async function unlockCurrentOrder() {
+    const button = document.getElementById('unlock-contact');
+    if (!state.orderId || button.disabled) return;
+    button.disabled = true;
+    button.textContent = 'Відкриваємо…';
+    try {
+        const order = await apiFetch(`/api/orders/${state.orderId}/unlock`, { method: 'POST' });
+        renderOrderDetails(order);
+        if (state.user) state.user.contact_credits = order.contact_credits;
+        document.getElementById('subscription-badge').textContent = order.has_subscription
+            ? `Безліміт до ${formatDate(order.subscription_until)}`
+            : `${order.contact_credits} безкоштовних контактів`;
+        if (state.tab === 'feed') loadOrders().catch(error => showToast(error.message));
+        tg?.HapticFeedback?.notificationOccurred('success');
+    } catch (error) {
+        button.disabled = false;
+        button.textContent = 'Відкрити контакт · 1 спроба';
+        document.getElementById('contact-gate').textContent = error.message;
+    }
+}
+
+function closeOrderModal() {
+    document.getElementById('order-modal').close();
+    state.orderId = null;
+    state.currentOrder = null;
+    tg?.BackButton?.hide();
+}
+
+async function switchTab(tab) {
+    state.tab = tab;
+    document.querySelectorAll('.tab').forEach(button => {
+        const active = button.dataset.tab === tab;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-selected', String(active));
+    });
+    document.querySelectorAll('.tab-content').forEach(section => {
+        section.classList.toggle('hidden', section.id !== `content-${tab}`);
+    });
+    try {
+        if (tab === 'feed') await loadOrders();
+        if (tab === 'favorites') await loadFavorites();
+        if (tab === 'filters') await loadFilters();
+        if (tab === 'profile') await loadProfile();
+        setMainButton(tab);
+    } catch (error) {
+        showToast(error.message);
+    }
+}
+
+function setMainButton(tab) {
+    if (!tg?.MainButton) return;
+    tg.MainButton.offClick(refreshOrders);
+    if (tab === 'feed') {
+        tg.MainButton.setText('Оновити стрічку');
+        tg.MainButton.onClick(refreshOrders);
+        tg.MainButton.show();
+    } else {
+        tg.MainButton.hide();
+    }
+}
+
+function refreshOrders() {
+    loadOrders().catch(error => showToast(error.message));
+}
+
+function openProposalModal(orderId) {
+    state.orderId = Number(orderId);
+    const modal = document.getElementById('proposal-modal');
+    document.getElementById('proposal-result').classList.add('hidden');
+    document.getElementById('proposal-error').classList.add('hidden');
+    document.getElementById('user-skills').value = localStorage.getItem(skillsStorageKey) || '';
+    modal.showModal();
+    tg?.BackButton?.show();
+    tg?.HapticFeedback?.impactOccurred('light');
+}
+
+function closeProposalModal() {
+    document.getElementById('proposal-modal').close();
+    state.orderId = null;
+    tg?.BackButton?.hide();
+}
+
+async function generateProposal() {
+    const skills = document.getElementById('user-skills').value.trim();
+    const result = document.getElementById('proposal-result');
+    const errorNode = document.getElementById('proposal-error');
+    if (skills.length < 2) {
+        errorNode.textContent = 'Опишіть ваші навички (мінімум 2 символи).';
+        errorNode.classList.remove('hidden');
+        return;
+    }
+    localStorage.setItem(skillsStorageKey, skills);
+    errorNode.classList.add('hidden');
+    result.textContent = 'Генеруємо відгук…';
+    result.classList.remove('hidden');
+    try {
+        const data = await apiFetch(`/api/orders/${state.orderId}/proposal`, {
+            method: 'POST',
+            body: JSON.stringify({ user_skills: skills }),
+        });
+        result.textContent = data.proposal;
+    } catch (error) {
+        result.classList.add('hidden');
+        errorNode.textContent = error.message;
+        errorNode.classList.remove('hidden');
+    }
+}
+
+document.querySelector('.tabs').addEventListener('click', event => {
+    const button = event.target.closest('[data-tab]');
+    if (button) switchTab(button.dataset.tab);
+});
+
+document.getElementById('search-form').addEventListener('submit', event => {
+    event.preventDefault();
+    loadOrders().catch(error => showToast(error.message));
+});
+
+document.body.addEventListener('click', async event => {
+    const button = event.target.closest('[data-action]');
+    if (button?.dataset.action === 'proposal') {
+        openProposalModal(button.dataset.orderId);
+        return;
+    }
+    if (button?.dataset.action === 'favorite') {
+        event.stopPropagation();
+        try {
+            const data = await apiFetch(`/api/orders/${button.dataset.orderId}/favorite`, { method: 'POST' });
+            button.textContent = data.favorited ? '★' : '☆';
+            button.dataset.favorited = String(data.favorited);
+            button.setAttribute('aria-label', data.favorited ? 'Видалити з обраного' : 'Додати в обране');
+            showToast(data.favorited ? 'Додано в обране' : 'Видалено з обраного');
+            tg?.HapticFeedback?.notificationOccurred('success');
+            if (state.tab === 'favorites' && !data.favorited) await loadFavorites();
+        } catch (error) {
+            showToast(error.message);
+        }
+        return;
+    }
+    if (button?.dataset.action === 'wheel-tab') {
+        document.getElementById('order-modal').close();
+        state.orderId = null;
+        state.currentOrder = null;
+        switchTab('profile');
+        return;
+    }
+    const card = event.target.closest('.order-card');
+    if (card && !event.target.closest('button, a, input, select, textarea')) {
+        openOrder(card.dataset.orderId);
+    }
+});
+
+document.getElementById('orders-list').addEventListener('keydown', handleOrderCardKeydown);
+document.getElementById('favorites-list').addEventListener('keydown', handleOrderCardKeydown);
+function handleOrderCardKeydown(event) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const card = event.target.closest('.order-card');
+    if (!card || event.target !== card) return;
+    event.preventDefault();
+    openOrder(card.dataset.orderId);
+}
+
+document.getElementById('filters-list').addEventListener('change', event => {
+    const field = event.target;
+    const category = field.dataset.category;
+    const filter = state.filters.find(item => item.category === category);
+    if (!filter) return;
+    if (field.dataset.action === 'filter-enabled') filter.enabled = field.checked;
+    if (field.dataset.action === 'filter-budget') filter.min_budget = Number(field.value || 0);
+    if (field.dataset.action === 'filter-keywords') filter.keywords = field.value.trim() || null;
+    saveFilter(category).catch(error => showToast(error.message));
+});
+
+document.getElementById('close-proposal').addEventListener('click', closeProposalModal);
+document.getElementById('generate-proposal').addEventListener('click', generateProposal);
+document.getElementById('close-order').addEventListener('click', closeOrderModal);
+document.getElementById('unlock-contact').addEventListener('click', unlockCurrentOrder);
+document.getElementById('spin-wheel').addEventListener('click', performWheelSpin);
+document.getElementById('order-modal').addEventListener('close', () => {
+    state.orderId = null;
+    state.currentOrder = null;
+    tg?.BackButton?.hide();
+});
+tg?.BackButton?.onClick(() => {
+    if (document.getElementById('order-modal').open) closeOrderModal();
+    else if (document.getElementById('proposal-modal').open) closeProposalModal();
+});
+
+async function initialize() {
+    if (!initData) {
+        showToast('Відкрийте застосунок через Telegram-бота.');
+        return;
+    }
+    try {
+        await loadProfile();
+        await switchTab('feed');
+    } catch (error) {
+        showToast(error.message);
+    }
+}
+
+initialize();
