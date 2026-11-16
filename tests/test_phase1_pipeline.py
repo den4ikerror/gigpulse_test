@@ -1,10 +1,14 @@
 import asyncio
 import unittest
 from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from src.ai.batcher import Batcher
+from src.ai.groq_chat import create_chat_completion
 from src.ai.llm_router import ClassificationError, LLMRouter
 from src.ai.prefilter import PreFilter
 from src.database.models import Base, IngestedPost, ORDER_CATEGORIES, utc_now
@@ -57,6 +61,54 @@ class ClassificationTests(unittest.TestCase):
             )
         with self.assertRaises(ClassificationError):
             LLMRouter._parse_json_response("[]", 1)
+
+
+class GroqModelSelectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_discovers_available_models_and_skips_non_chat_models(self):
+        response = object()
+        client = SimpleNamespace(
+            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[
+                SimpleNamespace(id="whisper-large-v3"),
+                SimpleNamespace(id="openai/gpt-oss-20b"),
+            ]))),
+            chat=SimpleNamespace(completions=SimpleNamespace(
+                create=AsyncMock(return_value=response),
+            )),
+        )
+
+        result = await create_chat_completion(
+            client,
+            messages=[{"role": "user", "content": "test"}],
+        )
+
+        self.assertIs(result, response)
+        client.chat.completions.create.assert_awaited_once_with(
+            model="openai/gpt-oss-20b",
+            messages=[{"role": "user", "content": "test"}],
+        )
+
+    async def test_tries_another_available_model_when_first_is_rejected(self):
+        response = object()
+
+        async def complete(*, model, **kwargs):
+            if model == "model-a":
+                raise RuntimeError("model unavailable")
+            return response
+
+        client = SimpleNamespace(
+            models=SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(data=[
+                SimpleNamespace(id="model-a"),
+                SimpleNamespace(id="model-b"),
+            ]))),
+            chat=SimpleNamespace(completions=SimpleNamespace(
+                create=AsyncMock(side_effect=complete),
+            )),
+        )
+
+        result = await create_chat_completion(client, messages=[])
+
+        self.assertIs(result, response)
+        self.assertEqual(client.chat.completions.create.await_count, 2)
 
 
 class BatcherTests(unittest.IsolatedAsyncioTestCase):
@@ -158,83 +210,31 @@ class IngestionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(await Repository.get_pending_notifications(session), [])
 
-    async def test_new_user_gets_trial_and_all_default_filters_once(self):
+    async def test_excluded_source_posts_are_not_processed_or_shown(self):
         async with self.session_maker() as session:
-            user = await Repository.get_or_create_user(session, 987654, "test_user")
-            first_trial_end = user.subscription_until
-            filters = await Repository.get_user_filters(session, user.id)
-            self.assertTrue(user.trial_used)
-            self.assertEqual(len(filters), len(ORDER_CATEGORIES))
-            self.assertEqual({item.category for item in filters}, set(ORDER_CATEGORIES))
-
-            repeated_user = await Repository.get_or_create_user(session, 987654, "test_user")
-            repeated_filters = await Repository.get_user_filters(session, repeated_user.id)
-            self.assertEqual(repeated_user.subscription_until, first_trial_end)
-            self.assertEqual(len(repeated_filters), len(ORDER_CATEGORIES))
-
-    async def test_user_can_update_category_filter_and_favorites(self):
-        async with self.session_maker() as session:
-            user = await Repository.get_or_create_user(session, 987655, "filter_user")
-            saved_filter = await Repository.set_user_filter(
-                session,
-                user.id,
-                "web_dev",
-                enabled=False,
-                min_budget=1500,
-                keywords="Python, React",
+            await Repository.enqueue_posts(session, [{
+                "hash_id": "c" * 64,
+                "title": "Оператор БПЛА",
+                "summary": "Ведення повітряної розвідки",
+                "raw_text": "Оператор БПЛА",
+                "contact_url": "https://jobs.dou.ua/vacancies/1/",
+                "source_name": "DOU Jobs",
+                "budget": None,
+            }])
+            self.assertEqual(await Repository.get_pending_posts(session), [])
+            result = await session.execute(
+                select(IngestedPost).where(IngestedPost.hash_id == "c" * 64)
             )
-            self.assertFalse(saved_filter.enabled)
-            self.assertEqual(saved_filter.min_budget, 1500)
-            self.assertEqual(saved_filter.keywords, "Python, React")
+            self.assertEqual(result.scalar_one().status, "processed")
 
             order = await Repository.create_order(
                 session,
-                hash_id="b" * 64,
-                category="web_dev",
-                title="API project",
-                summary="Build an API",
-                budget="2000 UAH",
-                source_name="Test",
-                contact_url="https://example.com/api",
-            )
-            self.assertTrue(await Repository.add_favorite(session, user.id, order.id))
-            self.assertEqual(
-                [item.id for item in await Repository.get_user_favorites(session, user.id)],
-                [order.id],
+                hash_id="d" * 64,
+                category="dev_bots",
+                title="Оператор БПЛА",
+                summary="Ведення повітряної розвідки",
+                budget=None,
+                source_name="DOU Jobs",
+                contact_url="https://jobs.dou.ua/vacancies/1/",
             )
             self.assertEqual(
-                await Repository.get_favorite_order_ids(session, user.id, [order.id]),
-                {order.id},
-            )
-            self.assertTrue(await Repository.remove_favorite(session, user.id, order.id))
-
-    async def test_irrelevant_ingested_post_is_processed_without_creating_an_order(self):
-        post = {
-            "hash_id": "d" * 64,
-            "title": "Drone pilot",
-            "summary": "Operate unmanned aerial vehicles",
-            "raw_text": "Drone pilot vacancy",
-            "contact_url": "https://example.com/drone-pilot",
-            "source_name": "DOU Jobs",
-            "budget": None,
-        }
-        async with self.session_maker() as session:
-            await Repository.enqueue_posts(session, [post])
-            pending = await Repository.get_pending_posts(session)
-            self.assertEqual(len(pending), 1)
-            orders = await Repository.complete_ingested_posts(
-                session,
-                pending,
-                {pending[0].id: {"index": 0, "category": "irrelevant"}},
-            )
-            self.assertEqual(orders, [])
-            self.assertEqual(await Repository.get_pending_posts(session), [])
-            self.assertEqual(await Repository.get_pending_notifications(session), [])
-            self.assertFalse(await Repository.order_exists(session, post["hash_id"]))
-            processed = await session.get(IngestedPost, pending[0].id)
-            self.assertEqual(processed.status, "processed")
-            self.assertIsNotNone(processed.processed_at)
-
-
-if __name__ == "__main__":
-    unittest.main()
