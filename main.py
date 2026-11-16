@@ -161,15 +161,27 @@ async def ingestion_worker(stop_event: asyncio.Event) -> None:
                 continue
 
             classifications = await llm_router.classify_batch([
-                {"raw_text": post.raw_text} for post in posts
+                {
+                    "title": post.title,
+                    "summary": post.summary,
+                    "raw_text": post.raw_text,
+                    "source_name": post.source_name,
+                }
+                for post in posts
             ])
             by_index = {item["index"]: item for item in classifications}
+            irrelevant_count = sum(
+                item["category"] == "irrelevant"
+                for item in classifications
+            )
             async with async_session_maker() as session:
                 orders = await Repository.complete_ingested_posts(
                     session,
                     posts,
                     {post.id: by_index[index] for index, post in enumerate(posts)},
                 )
+                if irrelevant_count:
+                    logger.info("Filtered %d unrelated posts", irrelevant_count)
                 for order in orders:
                     logger.info("New order classified: [%s] %s", order.category, order.title)
         except asyncio.CancelledError:
