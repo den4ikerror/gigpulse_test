@@ -7,7 +7,7 @@ GigPulse aggregates freelance listings from RSS feeds and optional public Telegr
 1. The RSS poller fetches Freelancehunt and DOU feeds every 60 seconds. The optional Telethon user client listens to the channels configured in `TG_CHANNELS`.
 2. The batcher groups six posts or flushes after 10 seconds, then persists them in the database before AI processing.
 3. A persistent ingestion queue deduplicates posts by normalized text and contact URL. AI and Telegram delivery failures retain posts for exponential-backoff retries instead of dropping them.
-4. Gemini is tried with configured keys and models; Groq is the fallback. Successful classifications are committed with their source queue records.
+4. Gemini is tried with configured keys and models; Groq is the fallback. The classifier can reject unrelated posts instead of forcing them into one of the supported categories; only relevant classifications become orders.
 5. The bot creates a user on `/start`, enables category filters, shows recent listings, and sends new matching listings. A cleanup worker deletes orders older than 48 hours.
 
 Payment processing remains Phase 3.
