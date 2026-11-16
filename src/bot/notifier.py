@@ -3,7 +3,13 @@ from html import escape
 import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from src.database.models import User, UserFilter, Order, EXCLUDED_ORDER_SOURCES
+from src.database.models import (
+    User,
+    UserFilter,
+    Order,
+    EXCLUDED_ORDER_SOURCES,
+    ORDER_CATEGORY_LABELS,
+)
 from src.bot.keyboards.inline import get_order_action_keyboard
 from src.services.order_filters import matches_order_filter
 
@@ -42,7 +48,7 @@ class Notifier:
             text = (
                 f"🔥 <b>Нове замовлення!</b>\n\n"
                 f"📌 <b>{escape(order.title)}</b>\n\n"
-                f"📁 Категорія: <code>{escape(order.category)}</code>\n"
+                f"📁 Категорія: <code>{escape(ORDER_CATEGORY_LABELS.get(order.category, order.category))}</code>\n"
                 f"💰 Бюджет: <code>{escape(order.budget or 'Не вказано')}</code>\n"
                 f"🌐 Джерело: <code>{escape(order.source_name)}</code>\n\n"
                 f"{escape(order.summary[:300])}..."
