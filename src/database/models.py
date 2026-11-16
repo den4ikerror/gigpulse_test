@@ -9,6 +9,7 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 ORDER_CATEGORIES = ("dev_bots", "web_dev", "design", "marketing", "video_text")
+EXCLUDED_ORDER_SOURCES = ("dou jobs",)
 
 class User(Base):
     __tablename__ = "users"
