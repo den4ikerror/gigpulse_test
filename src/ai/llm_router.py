@@ -3,6 +3,7 @@ import logging
 
 from src.config import settings
 from src.database.models import ORDER_CATEGORIES
+from src.ai.groq_chat import create_chat_completion
 
 logger = logging.getLogger("gigpulse.llm_router")
 IRRELEVANT_CATEGORY = "irrelevant"
@@ -105,8 +106,8 @@ class LLMRouter:
             groq_client = None
             try:
                 groq_client = AsyncGroq(api_key=self.groq_key)
-                completion = await groq_client.chat.completions.create(
-                    model=settings.GROQ_MODEL,
+                completion = await create_chat_completion(
+                    groq_client,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.1,
                     response_format={"type": "json_object"},
