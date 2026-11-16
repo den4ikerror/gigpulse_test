@@ -11,7 +11,14 @@ from src.ai.batcher import Batcher
 from src.ai.groq_chat import create_chat_completion
 from src.ai.llm_router import ClassificationError, LLMRouter
 from src.ai.prefilter import PreFilter
-from src.database.models import Base, IngestedPost, ORDER_CATEGORIES, utc_now
+from src.database.models import (
+    Base,
+    IngestedPost,
+    ORDER_CATEGORIES,
+    ORDER_CATEGORY_DESCRIPTIONS,
+    ORDER_CATEGORY_LABELS,
+    utc_now,
+)
 from src.database.repository import Repository
 
 
@@ -27,20 +34,25 @@ class PrefilterTests(unittest.TestCase):
 
 
 class ClassificationTests(unittest.TestCase):
+    def test_expanded_categories_have_labels_and_classifier_descriptions(self):
+        self.assertEqual(len(ORDER_CATEGORIES), 21)
+        self.assertEqual(set(ORDER_CATEGORIES), set(ORDER_CATEGORY_LABELS))
+        self.assertEqual(set(ORDER_CATEGORIES), set(ORDER_CATEGORY_DESCRIPTIONS))
+
     def test_parses_valid_array_and_object_responses(self):
         expected = [{
             "index": 0,
-            "category": "web_dev",
+            "category": "frontend_backend",
             "cleaned_title": "Website",
             "summary": "Build a website",
             "budget": None,
         }]
         array = LLMRouter._parse_json_response(
-            '[{"index":0,"category":"web_dev","cleaned_title":"Website","summary":"Build a website","budget":null}]',
+            '[{"index":0,"category":"frontend_backend","cleaned_title":"Website","summary":"Build a website","budget":null}]',
             1,
         )
         wrapped = LLMRouter._parse_json_response(
-            '{"orders":[{"index":0,"category":"web_dev","cleaned_title":"Website","summary":"Build a website","budget":null}]}',
+            '{"orders":[{"index":0,"category":"frontend_backend","cleaned_title":"Website","summary":"Build a website","budget":null}]}',
             1,
         )
         self.assertEqual(array, expected)
@@ -175,7 +187,7 @@ class IngestionRepositoryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     pending[0].id: {
                         "index": 0,
-                        "category": "web_dev",
+                        "category": "frontend_backend",
                         "cleaned_title": "Website build",
                         "summary": "Build a website",
                         "budget": None,
@@ -183,7 +195,7 @@ class IngestionRepositoryTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
             self.assertEqual(len(orders), 1)
-            self.assertEqual(orders[0].category, "web_dev")
+            self.assertEqual(orders[0].category, "frontend_backend")
             self.assertEqual(await Repository.get_pending_posts(session), [])
 
         async with self.session_maker() as session:
@@ -230,7 +242,7 @@ class IngestionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             order = await Repository.create_order(
                 session,
                 hash_id="d" * 64,
-                category="dev_bots",
+                category="chatbots",
                 title="Оператор БПЛА",
                 summary="Ведення повітряної розвідки",
                 budget=None,
@@ -238,3 +250,90 @@ class IngestionRepositoryTests(unittest.IsolatedAsyncioTestCase):
                 contact_url="https://jobs.dou.ua/vacancies/1/",
             )
             self.assertEqual(
+                await Repository.get_recent_orders(session, categories=["chatbots"]),
+                [],
+            )
+            user = await Repository.get_or_create_user(session, 987656, "favorites_user")
+            await Repository.add_favorite(session, user.id, order.id)
+            self.assertEqual(await Repository.get_user_favorites(session, user.id), [])
+
+    async def test_new_user_gets_trial_and_all_default_filters_once(self):
+        async with self.session_maker() as session:
+            user = await Repository.get_or_create_user(session, 987654, "test_user")
+            first_trial_end = user.subscription_until
+            filters = await Repository.get_user_filters(session, user.id)
+            self.assertTrue(user.trial_used)
+            self.assertEqual(len(filters), len(ORDER_CATEGORIES))
+            self.assertEqual({item.category for item in filters}, set(ORDER_CATEGORIES))
+
+            repeated_user = await Repository.get_or_create_user(session, 987654, "test_user")
+            repeated_filters = await Repository.get_user_filters(session, repeated_user.id)
+            self.assertEqual(repeated_user.subscription_until, first_trial_end)
+            self.assertEqual(len(repeated_filters), len(ORDER_CATEGORIES))
+
+    async def test_user_can_update_category_filter_and_favorites(self):
+        async with self.session_maker() as session:
+            user = await Repository.get_or_create_user(session, 987655, "filter_user")
+            saved_filter = await Repository.set_user_filter(
+                session,
+                user.id,
+                "frontend_backend",
+                enabled=False,
+                min_budget=1500,
+                keywords="Python, React",
+            )
+            self.assertFalse(saved_filter.enabled)
+            self.assertEqual(saved_filter.min_budget, 1500)
+            self.assertEqual(saved_filter.keywords, "Python, React")
+
+            order = await Repository.create_order(
+                session,
+                hash_id="b" * 64,
+                category="frontend_backend",
+                title="API project",
+                summary="Build an API",
+                budget="2000 UAH",
+                source_name="Test",
+                contact_url="https://example.com/api",
+            )
+            self.assertTrue(await Repository.add_favorite(session, user.id, order.id))
+            self.assertEqual(
+                [item.id for item in await Repository.get_user_favorites(session, user.id)],
+                [order.id],
+            )
+            self.assertEqual(
+                await Repository.get_favorite_order_ids(session, user.id, [order.id]),
+                {order.id},
+            )
+            self.assertTrue(await Repository.remove_favorite(session, user.id, order.id))
+
+    async def test_irrelevant_ingested_post_is_processed_without_creating_an_order(self):
+        post = {
+            "hash_id": "d" * 64,
+            "title": "Drone pilot",
+            "summary": "Operate unmanned aerial vehicles",
+            "raw_text": "Drone pilot vacancy",
+            "contact_url": "https://example.com/drone-pilot",
+            "source_name": "Test",
+            "budget": None,
+        }
+        async with self.session_maker() as session:
+            await Repository.enqueue_posts(session, [post])
+            pending = await Repository.get_pending_posts(session)
+            self.assertEqual(len(pending), 1)
+            orders = await Repository.complete_ingested_posts(
+                session,
+                pending,
+                {pending[0].id: {"index": 0, "category": "irrelevant"}},
+            )
+            self.assertEqual(orders, [])
+            self.assertEqual(await Repository.get_pending_posts(session), [])
+            self.assertEqual(await Repository.get_pending_notifications(session), [])
+            self.assertFalse(await Repository.order_exists(session, post["hash_id"]))
+            processed = await session.get(IngestedPost, pending[0].id)
+            self.assertEqual(processed.status, "processed")
+            self.assertIsNotNone(processed.processed_at)
+
+
+if __name__ == "__main__":
+    unittest.main()
