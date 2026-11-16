@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-3.8-flash"
     GEMINI_FALLBACK_MODELS: str = ""
     GROQ_API_KEY: str | None = None
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_MODEL: str = ""
 
     MONOBANK_TOKEN: str | None = None
     WAYFORPAY_MERCHANT_LOGIN: str | None = None
